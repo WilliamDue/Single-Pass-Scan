@@ -365,11 +365,11 @@ __device__ inline int32_t getDynID(int32_t* IDAddr, uint32_t tid) {
 	return retDynID;
 }
 
-
 /**
  * A single pass scan kernel that uses the three arrays described i
  * Merrill & Garland's paper.
 */
+/*
 template<typename T>
 __global__ void SinglePassScanLookbackKernel(T *d_in, T* d_out,
 									  	     const size_t N, int32_t* IDAddr,
@@ -412,6 +412,58 @@ __global__ void SinglePassScanLookbackKernel(T *d_in, T* d_out,
 
 	// Step 6 Copy the result into global memory
 	copyShr2Glb<T>(globaloffset, N, d_out, blockShrMem, tid);
+}
+*/
+
+template<typename T>
+__global__ void SinglePassScanLookbackKernel(T *d_in, T* d_out,
+                                             const size_t N, int32_t* IDAddr,
+                                             volatile uint32_t* flagArr,
+                                             volatile T* aggrArr,
+                                             volatile T* prefixArr,
+                                             bool par_redux) {
+	// Allocate shared memory
+	__shared__ T blockShrMem[Q * B];
+	volatile __shared__ T blockShrBuf[B];
+
+    uint32_t num_logical_blocks = (N+B*Q-1)/(B*Q);
+    uint32_t numer = num_logical_blocks - blockIdx.x;
+    uint32_t denom = gridDim.x;
+    uint32_t num_virt_iters = numer / denom + (numer % denom != 0);
+
+    for (size_t _i = 0; _i < num_virt_iters; _i++) {
+        // Step 1 get ids and initialize global arrays
+        uint32_t tid = threadIdx.x;
+        int32_t dynID = getDynID(IDAddr, tid);
+        uint32_t globaloffset = dynID * B * Q;
+
+        // Step 2 copy the memory the block will scan into shared memory.
+        copyGlb2Shr<T>(globaloffset, N, T(), d_in, blockShrMem, tid);
+
+        // Step 3 Do the scan on the block
+        // First scan each thread
+        threadScan<T>(blockShrMem, blockShrBuf, tid);
+
+        // Do the scan on the block level
+        blockScan<T>(blockShrBuf, tid);
+
+        // Save the result in shrmem.
+        threadAdd<T>(blockShrMem, blockShrBuf, tid);
+
+        // Step 4 use lookback scan to find the inclusive prefix value
+        T prefix = T();
+        if (!par_redux) {
+            prefix = lookbackScan<T>(aggrArr, prefixArr, flagArr, blockShrMem, dynID, tid);
+        } else {
+            prefix = lookbackScanWarp<T>(aggrArr, prefixArr, flagArr, blockShrMem, dynID, tid);
+        }
+
+        // Step 5 Sum the prefix into the scan
+        threadAddVal<T>(blockShrMem, prefix, tid, dynID);
+
+        // Step 6 Copy the result into global memory
+        copyShr2Glb<T>(globaloffset, N, d_out, blockShrMem, tid);
+    }
 }
 
 /**

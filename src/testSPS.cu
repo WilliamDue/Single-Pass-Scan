@@ -204,8 +204,9 @@ int singlePassScanLookback(const size_t N, T* h_in,
     T* h_ref = (T*)malloc(mem_size);
 	cudaMemset(d_out, 0,  N *sizeof(T));
 
-	uint32_t num_blocks = (N+B*Q-1)/(B*Q);
-    size_t f_array_size = num_blocks;
+    uint32_t num_logical_blocks = (N+B*Q-1)/(B*Q);
+	uint32_t num_blocks = 128;
+    size_t f_array_size = num_logical_blocks;
     int32_t* IDAddr;
     uint32_t* flagArr;
     T* aggrArr;
@@ -226,7 +227,7 @@ int singlePassScanLookback(const size_t N, T* h_in,
     unsigned long int elapsed;
     struct timeval t_start, t_end, t_diff;
     // time the GPU computation
-    // Need to reset the dynID and flag arr each time we call the kernel
+    // Need to  reset the dynID and flag arr each time we call the kernel
     // Before we can start to run it multiple times and get a benchmark.
     {
         gettimeofday(&t_start, NULL);
